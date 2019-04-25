@@ -1,0 +1,24 @@
+name: autograder
+version: "1.0"
+author: Alex T.
+about: Autograder for particles
+args:
+    - s:
+        short: s
+        required: true
+        multiple: false
+        help: Sets the summary file to use
+    - v:
+        short: v
+        required: true
+        multiple: false
+        help: Specifies what to autograde
+subcommands:
+    - test:
+        about: controls testing features
+        version: "1.3"
+        author: Someone E. <someone_else@other.com>
+        args:
+            - debug:
+                short: d
+                help: print debug information
