@@ -16,7 +16,8 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-static mut size: f64 = 0.0;
+const n: i32 = 10000;
+//static mut size: f64 = 0.0;
 
 
 struct particle_t
@@ -30,15 +31,15 @@ struct particle_t
     bin: f64,
 }
 
-//
-//  keep density constant
-//
-fn set_size(n: i32)
-{
-    unsafe {
-        size = (density * n as f64).sqrt();
-    }
-}
+////
+////  keep density constant
+////
+//fn set_size(n: i32)
+//{
+//    unsafe {
+//        size = (density * n as f64).sqrt();
+//    }
+//}
 
 //
 //  Initialize the particle positions and velocities
@@ -49,9 +50,11 @@ fn set_size(n: i32)
  *
  *
  * */
-fn init_particles(n: i32, p: &mut [particle_t])
+fn init_particles(n_t: i32, p: &mut [particle_t])
 {
 //    srand48(time(NULL));
+
+    let size: f64 = (density * n as f64).sqrt();
 
     let mut rng = rand::thread_rng();
 
@@ -131,6 +134,7 @@ fn apply_force(p: &mut [particle_t], i: i32, j: i32, dmin: &mut f64, davg: &mut 
 
 fn move_particle(p: &mut particle_t)
 {
+    let size: f64 = (density * n as f64).sqrt();
     //
     //  slightly simplified Velocity Verlet integration
     //  conserves energy better than explicit Euler method
@@ -164,10 +168,23 @@ fn move_particle(p: &mut particle_t)
 }
 
 
+fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32{
+/* Returns bin of particle given its position.
+ *
+ * */
+
+//    printf("y/size: %f, x/size: %f, out: %f\n", y/size * (box_num -1),  x/size, floor((y/size)*(box_num-1) + (x/size)));
+
+    return ((y/size_t)  * (box_num - 1) as f64 + (x/size_t)).floor() as i32;
+
+}
+
+
 fn main() {
     let mut navg: i32 = 0;
     let mut nabsavg: i32 = 0;
-    const n: i32 = 1000;
+
+    let size: f64 = (density * n as f64).sqrt();
 
     let mut davg: f64 = 0.0;
     let mut dmin: f64 = 0.0;
@@ -177,8 +194,6 @@ fn main() {
 
     let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
 
-
-    set_size(n);
     init_particles(n, &mut particles);
 
 
@@ -190,8 +205,24 @@ fn main() {
     let new_x: f64 = 0.0;
     let new_y: f64 = 0.0;
 
-    let BOX_NUM: i32;
-    unsafe { BOX_NUM = (size / cutoff).floor() as i32; }
+    let BOX_NUM: i32 = (size / cutoff).floor() as i32;
+    let BOX_NUM_t :i32 = BOX_NUM * BOX_NUM;
+
+    let mut k: usize = 0;
+
+    let mut bins = Vec::new();
+
+    for k in 0..BOX_NUM_t{
+        let mut tmpVec: Vec<i32> = Vec::new();
+        bins.push(tmpVec);
+    }
+
+    for k in 0..n{
+       let bin_index : usize =  compute_bin(particles[k as usize].x, particles[k as usize].y, size, BOX_NUM) as usize;
+       bins[bin_index].push(k);
+//        println!("{}, {}", n, bin_index);
+    }
+
 
     let mut step: i32 = 0;
     let mut i: usize = 0;
@@ -212,8 +243,23 @@ fn main() {
             particles[i as usize].ax = 0.0;
             particles[i as usize].ay = 0.0;
 
-            for j in 0..n {
-                apply_force(&mut particles, i, j, &mut dmin, &mut davg, &mut navg);
+
+            let curr_bin: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
+
+            let curr_x: i32 = curr_bin % BOX_NUM;
+            let curr_y: i32 = curr_bin / BOX_NUM;
+
+            for j in -1..2{
+                for k in -1..2{
+                    if(curr_x + j >= 0 && curr_x + j < BOX_NUM  && curr_y + k >=0 && curr_y + k < BOX_NUM){
+                        let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
+                        for v in &bins[idx]{
+                            apply_force(&mut particles, i, *v as i32, &mut dmin, &mut davg, &mut navg);
+                        }
+                    }
+
+                }
+
             }
         }
 
@@ -221,8 +267,17 @@ fn main() {
         //  move particles
         //
         for i in 0..n {
+
+            let old_index: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
             move_particle (&mut particles[i as usize]);
-//            println!("x: {}, y: {}", particles[i as usize].x, particles[i as usize].y);
+            let new_index: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
+
+            if old_index != new_index{
+//                println!("1) {:?}, {}",  bins[old_index as usize], i);
+                bins[old_index as usize].retain(|&x| x != i);
+//                println!("2) {:?}, {}",  bins[old_index as usize], i);
+                bins[new_index as usize].push(i);
+            }
         }
 
 
