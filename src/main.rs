@@ -19,7 +19,7 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 5000;
+const n: i32 = 10000;
 
 
 struct particle_t_accel
@@ -134,10 +134,10 @@ fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle
     //
     //  very simple short-range repulsive force
     //
+
     let coef: f64 = (1.0 - cutoff / r) / r2 / mass;
     p_acc.ax += coef * dx;
     p_acc.ay += coef * dy;
-//    println!("{}, {}, {}, {}", (*p_acc).ax, (*p_acc).ay, dx, dy);
 
 }
 
@@ -314,8 +314,8 @@ fn main() {
         //  move particles
         //
         particles.par_iter_mut().for_each(|particle| {
+
             let old_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
-//            println!("{}", particle.pid);
             move_particle (particle, &particles_acc[particle.pid as usize]);
             let new_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
 
