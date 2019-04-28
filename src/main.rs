@@ -1,11 +1,14 @@
-use std::num;
-
 extern crate rand;
 extern crate clap;
+extern crate rayon;
 
 use rand::Rng;
 use std::{mem, ptr};
 use std::time::{Duration, Instant};
+use std::num;
+use rayon::prelude::*;
+use std::sync::{Mutex, Arc, RwLock};
+
 
 const density: f64 = 0.0005;
 const mass: f64 = 0.01;
@@ -16,8 +19,15 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 10000;
-//static mut size: f64 = 0.0;
+const n: i32 = 5000;
+
+
+struct particle_t_accel
+{
+    ax: f64,
+    ay: f64,
+    pid: i32,
+}
 
 
 struct particle_t
@@ -26,9 +36,7 @@ struct particle_t
     y: f64,
     vx: f64,
     vy: f64,
-    ax: f64,
-    ay: f64,
-    bin: f64,
+    pid: i32,
 }
 
 ////
@@ -50,10 +58,11 @@ struct particle_t
  *
  *
  * */
-fn init_particles(n_t: i32, p: &mut [particle_t])
+fn init_particles(n_t: i32, p_l: &mut [particle_t])
 {
 //    srand48(time(NULL));
 
+//    let p = p_l.write().unwrap();
     let size: f64 = (density * n as f64).sqrt();
 
     let mut rng = rand::thread_rng();
@@ -84,24 +93,40 @@ fn init_particles(n_t: i32, p: &mut [particle_t])
         //  distribute particles evenly to ensure proper spacing
         //
 
+        let mut p = &mut p_l[i as usize];
+
         unsafe {
-            p[i as usize].x = size * (1. + (k % sx) as f64) / (1.0 + sx as f64); //gets x
-            p[i as usize].y = size * (1. + (k / sx) as f64) / (1.0 + sy as f64); //gets y
+            p.x = size * (1. + (k % sx) as f64) / (1.0 + sx as f64); //gets x
+            p.y = size * (1. + (k / sx) as f64) / (1.0 + sy as f64); //gets y
         }
 
         //
         //  assign random velocities within a bound
         //
-        p[i as usize].vx = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
-        p[i as usize].vy = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
+        p.vx = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
+        p.vy = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
+
     }
 }
 
-fn apply_force(p: &mut [particle_t], i: i32, j: i32, dmin: &mut f64, davg: &mut f64, navg: &mut i32)
+fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle_t, dmin: &mut f64, davg: &mut f64, navg: &mut i32)
 {
 
-    let dx: f64 = p[j as usize].x - p[i as usize].x;
-    let dy: f64 = p[j as usize].y - p[i as usize].y;
+//    let p1;
+//    let mut p2;
+//
+//    if p_i  > p_j   {
+//         p1 = p_i.read().unwrap();
+//         p2 = p_j.write().unwrap();
+//    }
+//    else{
+//        p2 = p_j.write().unwrap();
+//        p1 = p_i.read().unwrap();
+//    }
+
+    let dx: f64 = neighbor.x - p.x;
+    let dy: f64 = neighbor.y - p.y;
+
     let mut r2: f64 = dx * dx + dy * dy;
     if r2 > cutoff * cutoff {
         return;
@@ -118,13 +143,14 @@ fn apply_force(p: &mut [particle_t], i: i32, j: i32, dmin: &mut f64, davg: &mut 
     r2 = r2.max(min_r * min_r);
     let r: f64 = r2.sqrt();
 
-
     //
     //  very simple short-range repulsive force
     //
     let coef: f64 = (1.0 - cutoff / r) / r2 / mass;
-    p[i as usize].ax += coef * dx;
-    p[i as usize].ay += coef * dy;
+    p_acc.ax += coef * dx;
+    p_acc.ay += coef * dy;
+//    println!("{}, {}, {}, {}", (*p_acc).ax, (*p_acc).ay, dx, dy);
+
 }
 
 
@@ -132,15 +158,15 @@ fn apply_force(p: &mut [particle_t], i: i32, j: i32, dmin: &mut f64, davg: &mut 
 //  integrate the ODE
 //
 
-fn move_particle(p: &mut particle_t)
+fn move_particle(p: &mut particle_t, p_acc: &particle_t_accel)
 {
     let size: f64 = (density * n as f64).sqrt();
     //
     //  slightly simplified Velocity Verlet integration
     //  conserves energy better than explicit Euler method
     //
-    p.vx += p.ax * dt;
-    p.vy += p.ay * dt;
+    p.vx += p_acc.ax * dt;
+    p.vy += p_acc.ay * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
 
@@ -173,29 +199,59 @@ fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32{
  *
  * */
 
-//    printf("y/size: %f, x/size: %f, out: %f\n", y/size * (box_num -1),  x/size, floor((y/size)*(box_num-1) + (x/size)));
-
     return ((y/size_t)  * (box_num - 1) as f64 + (x/size_t)).floor() as i32;
 
 }
 
 
 fn main() {
-    let mut navg: i32 = 0;
+
+    let mut navg = Mutex::new(0);
+//    let mut navg: i32 = 0;
     let mut nabsavg: i32 = 0;
 
     let size: f64 = (density * n as f64).sqrt();
 
-    let mut davg: f64 = 0.0;
-    let mut dmin: f64 = 0.0;
-    let mut absmin: f64 = 1.0;
-    let mut absavg: f64 = 0.0;
+//    let mut davg: f64 = 0.0;
+//    let mut dmin: f64 = 0.0;
+//    let mut absmin: f64 = 1.0;
+//    let mut absavg: f64 = 0.0;
+
+    let mut davg = Mutex::new(0.0);
+    let mut dmin = Mutex::new(1.0);
+    let mut absmin = 1.0;
+    let mut absavg = 0.0;
+
+
+//    let mut particles: [RwLock<particle_t>; n as usize] = unsafe { ::std::mem::uninitialized() };
+
+//    let mut particles = Vec::new();
+//    let mut particles_acc = Vec::new();
 
 
     let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
+    let mut particles_acc: [particle_t_accel; n as usize] = unsafe { ::std::mem::uninitialized() };
+
+
+    for i in 0..n{
+        particles[i as usize] = particle_t {
+            x: 0.0,
+            y: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+            pid: i,
+        };
+
+        particles_acc[i as usize] = particle_t_accel {
+            ax: 0.0,
+            ay: 0.0,
+            pid: i,
+        };
+
+    }
+
 
     init_particles(n, &mut particles);
-
 
     let sx: i32 = ((n as f64).sqrt()).ceil() as i32;
     let sy: i32 = (n + sx - 1) / sx;
@@ -213,16 +269,14 @@ fn main() {
     let mut bins = Vec::new();
 
     for k in 0..BOX_NUM_t{
-        let mut tmpVec: Vec<i32> = Vec::new();
+        let mut tmpVec: RwLock<Vec<i32>> = RwLock::new(Vec::new());
         bins.push(tmpVec);
     }
 
     for k in 0..n{
-       let bin_index : usize =  compute_bin(particles[k as usize].x, particles[k as usize].y, size, BOX_NUM) as usize;
-       bins[bin_index].push(k);
-//        println!("{}, {}", n, bin_index);
+        let bin_index : usize =  compute_bin(particles[k as usize].x, particles[k as usize].y, size, BOX_NUM) as usize;
+        bins[bin_index].write().unwrap().push(k);
     }
-
 
     let mut step: i32 = 0;
     let mut i: usize = 0;
@@ -231,21 +285,30 @@ fn main() {
     let now = Instant::now();
 
     for step in 0..NSTEPS {
-        navg = 0;
-        davg = 0.0;
-        dmin = 1.0;
+//        navg = 0;
+//        davg = 0.0;
+//        dmin = 1.0;
+
+
+
 
         //
         //  compute forces
         //
 
-        for i in 0..n {
-            particles[i as usize].ax = 0.0;
-            particles[i as usize].ay = 0.0;
+        particles_acc.par_iter_mut().for_each(|mut p_acc|{
+
+            let mut navg_local = 0;
+            let mut davg_local = 0.0;
+            let mut dmin_local = 1.0;
+
+            p_acc.ax = 0.0;
+            p_acc.ay = 0.0;
+
+//            println!("{}", p_acc.pid);
 
 
-            let curr_bin: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
-
+            let curr_bin: i32 = compute_bin(particles[p_acc.pid as usize].x, particles[p_acc.pid as usize].y, size, BOX_NUM);
             let curr_x: i32 = curr_bin % BOX_NUM;
             let curr_y: i32 = curr_bin / BOX_NUM;
 
@@ -253,44 +316,65 @@ fn main() {
                 for k in -1..2{
                     if(curr_x + j >= 0 && curr_x + j < BOX_NUM  && curr_y + k >=0 && curr_y + k < BOX_NUM){
                         let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
-                        for v in &bins[idx]{
-                            apply_force(&mut particles, i, *v as i32, &mut dmin, &mut davg, &mut navg);
-                        }
+                        bins[idx].read().unwrap().iter()
+                            .for_each(|v|  {
+                                apply_force(p_acc, &particles[p_acc.pid as usize],&particles[*v as usize], &mut dmin_local, &mut davg_local, &mut navg_local);
+                                }
+                            );
                     }
-
                 }
-
             }
-        }
+
+
+            let mut navg_l = navg.lock().unwrap();
+            *navg_l += navg_local;
+
+            let mut davg_l = davg.lock().unwrap();
+            *davg_l += davg_local;
+
+            let mut dmin_l = dmin.lock().unwrap();
+            if dmin_local < *dmin_l{
+                *dmin_l = dmin_local ;
+            }
+
+        });
 
         //
         //  move particles
         //
-        for i in 0..n {
-
-            let old_index: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
-            move_particle (&mut particles[i as usize]);
-            let new_index: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
+        particles.par_iter_mut().for_each(|particle| {
+            let old_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
+//            println!("{}", particle.pid);
+            move_particle (particle, &particles_acc[particle.pid as usize]);
+            let new_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
 
             if old_index != new_index{
-//                println!("1) {:?}, {}",  bins[old_index as usize], i);
-                bins[old_index as usize].retain(|&x| x != i);
-//                println!("2) {:?}, {}",  bins[old_index as usize], i);
-                bins[new_index as usize].push(i);
+                {
+                    let mut bin = bins[old_index as usize].write().unwrap();
+                    bin.retain(|&x| x != particle.pid);
+                }
+                {
+                    let mut bin = bins[new_index as usize].write().unwrap();
+                    bin.push(particle.pid)
+                }
             }
-        }
-
+        });
 
         //
         // Computing statistical data
         //
-        if navg > 0 {
-            absavg +=  davg/(navg as f64);
+
+        let navg_l = navg.lock().unwrap();
+        let davg_l = davg.lock().unwrap();
+        let dmin_l = dmin.lock().unwrap();
+
+        if *navg_l > 0 {
+            absavg +=  *davg_l/(*navg_l as f64);
             nabsavg+=1;
         }
 
-        if dmin < absmin {
-            absmin = dmin;
+        if *(dmin_l) < absmin {
+            absmin = *dmin_l;
         }
 
 
@@ -317,7 +401,6 @@ fn main() {
     if absavg < 0.8 {
         println!("The average distance is below 0.8 meaning that most particles are not interacting");
     }
-
 }
 
 
