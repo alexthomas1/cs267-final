@@ -112,18 +112,6 @@ fn init_particles(n_t: i32, p_l: &mut [particle_t])
 fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle_t, dmin: &mut f64, davg: &mut f64, navg: &mut i32)
 {
 
-//    let p1;
-//    let mut p2;
-//
-//    if p_i  > p_j   {
-//         p1 = p_i.read().unwrap();
-//         p2 = p_j.write().unwrap();
-//    }
-//    else{
-//        p2 = p_j.write().unwrap();
-//        p1 = p_i.read().unwrap();
-//    }
-
     let dx: f64 = neighbor.x - p.x;
     let dy: f64 = neighbor.y - p.y;
 
