@@ -206,32 +206,19 @@ fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32{
 
 fn main() {
 
-    let mut navg = Mutex::new(0);
-//    let mut navg: i32 = 0;
-    let mut nabsavg: i32 = 0;
-
     let size: f64 = (density * n as f64).sqrt();
 
-//    let mut davg: f64 = 0.0;
-//    let mut dmin: f64 = 0.0;
-//    let mut absmin: f64 = 1.0;
-//    let mut absavg: f64 = 0.0;
-
+    let mut navg = Mutex::new(0);
     let mut davg = Mutex::new(0.0);
     let mut dmin = Mutex::new(1.0);
+
+    //Global stats
+    let mut nabsavg: i32 = 0;
     let mut absmin = 1.0;
     let mut absavg = 0.0;
 
-
-//    let mut particles: [RwLock<particle_t>; n as usize] = unsafe { ::std::mem::uninitialized() };
-
-//    let mut particles = Vec::new();
-//    let mut particles_acc = Vec::new();
-
-
     let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
     let mut particles_acc: [particle_t_accel; n as usize] = unsafe { ::std::mem::uninitialized() };
-
 
     for i in 0..n{
         particles[i as usize] = particle_t {
@@ -249,7 +236,6 @@ fn main() {
         };
 
     }
-
 
     init_particles(n, &mut particles);
 
@@ -285,12 +271,6 @@ fn main() {
     let now = Instant::now();
 
     for step in 0..NSTEPS {
-//        navg = 0;
-//        davg = 0.0;
-//        dmin = 1.0;
-
-
-
 
         //
         //  compute forces
@@ -298,6 +278,7 @@ fn main() {
 
         particles_acc.par_iter_mut().for_each(|mut p_acc|{
 
+            //Each thread will have a local copy of the stats
             let mut navg_local = 0;
             let mut davg_local = 0.0;
             let mut dmin_local = 1.0;
@@ -326,6 +307,8 @@ fn main() {
             }
 
 
+            //Synchronization step
+            //TODO: Use only one lock to enter here. Less overhead?
             let mut navg_l = navg.lock().unwrap();
             *navg_l += navg_local;
 
