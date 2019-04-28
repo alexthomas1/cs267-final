@@ -36,16 +36,6 @@ struct particle_t
     bin: f64,
 }
 
-////
-////  keep density constant
-////
-//fn set_size(n: i32)
-//{
-//    unsafe {
-//        size = (density * n as f64).sqrt();
-//    }
-//}
-
 //
 //  Initialize the particle positions and velocities
 //
@@ -152,24 +142,23 @@ fn move_particle(p: &mut particle_t)
     //
     //  bounce from walls
     //
-    unsafe {
-        while p.x < 0.0 || p.x > size {
-            if p.x < 0.0 {
-                p.x = -1.0 * p.x;
-            } else {
-                p.x = 2.0 * size - p.x;
-            }
-            p.vx = -p.vx;
+    while p.x < 0.0 || p.x > size {
+        if p.x < 0.0 {
+            p.x = -1.0 * p.x;
+        } else {
+            p.x = 2.0 * size - p.x;
         }
-        while p.y < 0.0 || p.y > size {
-            if p.y < 0.0 {
-                p.y = -1.0 * p.y;
-            } else {
-                p.y = 2.0 * size - p.y;
-            }
-            p.vy = -p.vy;
-        }
+        p.vx = -p.vx;
     }
+    while p.y < 0.0 || p.y > size {
+        if p.y < 0.0 {
+            p.y = -1.0 * p.y;
+        } else {
+            p.y = 2.0 * size - p.y;
+        }
+        p.vy = -p.vy;
+    }
+
 }
 
 

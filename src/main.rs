@@ -19,7 +19,7 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 10000;
+const n: i32 = 100000;
 
 
 struct particle_t_accel
@@ -200,6 +200,10 @@ fn main() {
     let mut davg = Mutex::new(0.0);
     let mut dmin = Mutex::new(1.0);
 
+//    let mut navg = RwLock::new(0);
+//    let mut davg = RwLock::new(0.0);
+//    let mut dmin = RwLock::new(1.0);
+
     //Global stats
     let mut nabsavg: i32 = 0;
     let mut absmin = 1.0;
@@ -258,12 +262,21 @@ fn main() {
 
     let now = Instant::now();
 
+    let mut apply_force_time = 0;
+    let mut move_time = 0;
+    let mut synch_time = 0;
+
+    let mut apply_force_start;
+    let mut move_start ;
+    let mut synch_start;
+
     for step in 0..NSTEPS {
 
         //
         //  compute forces
         //
 
+        apply_force_start = now.elapsed().as_millis();;
         particles_acc.par_iter_mut().for_each(|mut p_acc|{
 
             //Each thread will have a local copy of the stats
@@ -273,8 +286,6 @@ fn main() {
 
             p_acc.ax = 0.0;
             p_acc.ay = 0.0;
-
-//            println!("{}", p_acc.pid);
 
 
             let curr_bin: i32 = compute_bin(particles[p_acc.pid as usize].x, particles[p_acc.pid as usize].y, size, BOX_NUM);
@@ -294,7 +305,6 @@ fn main() {
                 }
             }
 
-
             //Synchronization step
             //TODO: Use only one lock to enter here. Less overhead?
             let mut navg_l = navg.lock().unwrap();
@@ -308,11 +318,25 @@ fn main() {
                 *dmin_l = dmin_local ;
             }
 
+//            let mut navg_l = navg.write().unwrap();
+//            *navg_l += navg_local;
+//
+//            let mut davg_l = davg.write().unwrap();
+//            *davg_l += davg_local;
+//
+//            let mut dmin_l = dmin.write().unwrap();
+//            if dmin_local < *dmin_l{
+//                *dmin_l = dmin_local ;
+//            }
+
         });
+
+        apply_force_time +=  now.elapsed().as_millis() - apply_force_start;
 
         //
         //  move particles
         //
+        move_start = now.elapsed().as_millis();
         particles.par_iter_mut().for_each(|particle| {
 
             let old_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
@@ -331,13 +355,21 @@ fn main() {
             }
         });
 
+        move_time += now.elapsed().as_millis() - move_start;
+//        println!("{}", now.elapsed().as_secs());
+
         //
         // Computing statistical data
         //
 
+        synch_start = now.elapsed().as_millis();;
         let navg_l = navg.lock().unwrap();
         let davg_l = davg.lock().unwrap();
         let dmin_l = dmin.lock().unwrap();
+
+//        let navg_l = navg.write().unwrap();
+//        let davg_l = davg.write().unwrap();
+//        let dmin_l = dmin.write().unwrap();
 
         if *navg_l > 0 {
             absavg +=  *davg_l/(*navg_l as f64);
@@ -347,11 +379,17 @@ fn main() {
         if *(dmin_l) < absmin {
             absmin = *dmin_l;
         }
+        synch_time +=  now.elapsed().as_millis() - synch_start;
 
 
     }
 
-    println!("n = {}, simulation time = {} seconds", n, now.elapsed().as_secs());
+    println!("n = {}, simulation time = {} ms, apply_force_time = {}, move_time = {}, synch_time = {}",
+             n,
+             now.elapsed().as_millis(),
+             apply_force_time,
+             move_time,
+             synch_time);
 
     if nabsavg > 0 {
         absavg /= nabsavg as f64;
