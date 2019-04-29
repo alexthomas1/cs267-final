@@ -1,6 +1,9 @@
 extern crate rand;
 extern crate clap;
 extern crate rayon;
+extern crate crossbeam;
+extern crate num_cpus;
+
 
 use rand::Rng;
 use std::{mem, ptr};
@@ -8,18 +11,19 @@ use std::time::{Duration, Instant};
 use std::num;
 use rayon::prelude::*;
 use std::sync::{Mutex, Arc, RwLock};
+use std::thread;
 
 
-const density: f64 = 0.0005;
-const mass: f64 = 0.01;
-const cutoff: f64 = 0.01;
-const min_r: f64 = (cutoff) / 100.0;
-const dt: f64 = 0.0005;
+const DENSITY: f64 = 0.0005;
+const MASS: f64 = 0.01;
+const CUTOFF: f64 = 0.01;
+const MIN_R: f64 = (CUTOFF) / 100.0;
+const DT: f64 = 0.0005;
 
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 100000;
+const n: i32 = 5000;
 
 
 struct particle_t_accel
@@ -40,12 +44,12 @@ struct particle_t
 }
 
 ////
-////  keep density constant
+////  keep DENSITY constant
 ////
 //fn set_size(n: i32)
 //{
 //    unsafe {
-//        size = (density * n as f64).sqrt();
+//        size = (DENSITY * n as f64).sqrt();
 //    }
 //}
 
@@ -58,12 +62,12 @@ struct particle_t
  *
  *
  * */
-fn init_particles(n_t: i32, p_l: &mut [particle_t])
+fn init_particles(n_t: i32, p_l: &mut [RwLock<particle_t>])
 {
 //    srand48(time(NULL));
 
 //    let p = p_l.write().unwrap();
-    let size: f64 = (density * n as f64).sqrt();
+    let size: f64 = (DENSITY * n as f64).sqrt();
 
     let mut rng = rand::thread_rng();
 
@@ -86,14 +90,14 @@ fn init_particles(n_t: i32, p_l: &mut [particle_t])
         //  make sure particles are not spatially sorted
         //
 
-        j = (rng.gen::<u32>() % ((n - i) as u32) ) as u32; //Generate random number from 0.. n-1
+        j = (rng.gen::<u32>() % ((n - i) as u32)) as u32; //Generate random number from 0.. n-1
         k = shuffle[j as usize];
         shuffle[j as usize] = shuffle[(n - i - 1) as usize];
         //
         //  distribute particles evenly to ensure proper spacing
         //
 
-        let mut p = &mut p_l[i as usize];
+        let mut p = &mut p_l[i as usize].write().unwrap();
 
         unsafe {
             p.x = size * (1. + (k % sx) as f64) / (1.0 + sx as f64); //gets x
@@ -105,40 +109,37 @@ fn init_particles(n_t: i32, p_l: &mut [particle_t])
         //
         p.vx = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
         p.vy = (rng.gen::<f64>() * 2.0 - 1.0) as f64;
-
     }
 }
 
 fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle_t, dmin: &mut f64, davg: &mut f64, navg: &mut i32)
 {
-
     let dx: f64 = neighbor.x - p.x;
     let dy: f64 = neighbor.y - p.y;
 
     let mut r2: f64 = dx * dx + dy * dy;
-    if r2 > cutoff * cutoff {
+    if r2 > CUTOFF * CUTOFF {
         return;
     }
     if r2 != 0.0
     {
-        if r2 / (cutoff * cutoff) < *dmin * (*dmin) {
-            *dmin = r2.sqrt() / cutoff;
+        if r2 / (CUTOFF * CUTOFF) < *dmin * (*dmin) {
+            *dmin = r2.sqrt() / CUTOFF;
         }
-        (*davg) += r2.sqrt() / cutoff;
+        (*davg) += r2.sqrt() / CUTOFF;
         (*navg) += 1;
     }
 
-    r2 = r2.max(min_r * min_r);
+    r2 = r2.max(MIN_R * MIN_R);
     let r: f64 = r2.sqrt();
 
     //
     //  very simple short-range repulsive force
     //
 
-    let coef: f64 = (1.0 - cutoff / r) / r2 / mass;
+    let coef: f64 = (1.0 - CUTOFF / r) / r2 / MASS;
     p_acc.ax += coef * dx;
     p_acc.ay += coef * dy;
-
 }
 
 
@@ -148,15 +149,15 @@ fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle
 
 fn move_particle(p: &mut particle_t, p_acc: &particle_t_accel)
 {
-    let size: f64 = (density * n as f64).sqrt();
+    let size: f64 = (DENSITY * n as f64).sqrt();
     //
     //  slightly simplified Velocity Verlet integration
     //  conserves energy better than explicit Euler method
     //
-    p.vx += p_acc.ax * dt;
-    p.vy += p_acc.ay * dt;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
+    p.vx += p_acc.ax * DT;
+    p.vy += p_acc.ay * DT;
+    p.x += p.vx * DT;
+    p.y += p.vy * DT;
 
     //
     //  bounce from walls
@@ -182,23 +183,23 @@ fn move_particle(p: &mut particle_t, p_acc: &particle_t_accel)
 }
 
 
-fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32{
-/* Returns bin of particle given its position.
- *
- * */
+fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32 {
+    /* Returns bin of particle given its position.
+     *
+     * */
 
-    return ((y/size_t)  * (box_num - 1) as f64 + (x/size_t)).floor() as i32;
-
+    return ((y / size_t) * (box_num - 1) as f64 + (x / size_t)).floor() as i32;
 }
 
 
 fn main() {
+    let size: f64 = (DENSITY * n as f64).sqrt();
 
-    let size: f64 = (density * n as f64).sqrt();
+    let num = n/(num_cpus::get() as i32);
 
-    let mut navg = Mutex::new(0);
-    let mut davg = Mutex::new(0.0);
-    let mut dmin = Mutex::new(1.0);
+    let navg = Arc::new(Mutex::new(0));
+    let davg = Arc::new(Mutex::new(0.0));
+    let dmin = Arc::new(Mutex::new(1.0));
 
 //    let mut navg = RwLock::new(0);
 //    let mut davg = RwLock::new(0.0);
@@ -209,24 +210,43 @@ fn main() {
     let mut absmin = 1.0;
     let mut absavg = 0.0;
 
-    let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
-    let mut particles_acc: [particle_t_accel; n as usize] = unsafe { ::std::mem::uninitialized() };
+//    let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
 
-    for i in 0..n{
-        particles[i as usize] = particle_t {
+    let mut particles = Vec::new();
+    let mut particles_acc = Vec::new();
+
+//    let mut particles_acc: [particle_t_accel; n as usize] = unsafe { ::std::mem::uninitialized() };
+
+
+    for i in 0..n {
+        particles.push(RwLock::new(particle_t {
             x: 0.0,
             y: 0.0,
             vx: 0.0,
             vy: 0.0,
             pid: i,
-        };
+        }));
 
-        particles_acc[i as usize] = particle_t_accel {
+//        particles[i as usize] = particle_t {
+//            x: 0.0,
+//            y: 0.0,
+//            vx: 0.0,
+//            vy: 0.0,
+//            pid: i,
+//        };
+
+//        println!("{}, {}, {:?}", i, particles_acc.len(), particles_acc[i as usize]);
+//        particles_acc[i as usize] = particle_t_accel {
+//            ax: 0.0,
+//            ay: 0.0,
+//            pid: i,
+//        };
+
+        particles_acc.push(RwLock::new(particle_t_accel {
             ax: 0.0,
             ay: 0.0,
             pid: i,
-        };
-
+        }));
     }
 
     init_particles(n, &mut particles);
@@ -239,20 +259,20 @@ fn main() {
     let new_x: f64 = 0.0;
     let new_y: f64 = 0.0;
 
-    let BOX_NUM: i32 = (size / cutoff).floor() as i32;
-    let BOX_NUM_t :i32 = BOX_NUM * BOX_NUM;
+    let BOX_NUM: i32 = (size / CUTOFF).floor() as i32;
+    let BOX_NUM_t: i32 = BOX_NUM * BOX_NUM;
 
     let mut k: usize = 0;
-
     let mut bins = Vec::new();
 
-    for k in 0..BOX_NUM_t{
+    for k in 0..BOX_NUM_t {
         let mut tmpVec: RwLock<Vec<i32>> = RwLock::new(Vec::new());
         bins.push(tmpVec);
     }
 
-    for k in 0..n{
-        let bin_index : usize =  compute_bin(particles[k as usize].x, particles[k as usize].y, size, BOX_NUM) as usize;
+    for k in 0..n {
+        let p = particles[k as usize].read().unwrap();
+        let bin_index: usize = compute_bin(p.x, p.y, size, BOX_NUM) as usize;
         bins[bin_index].write().unwrap().push(k);
     }
 
@@ -267,8 +287,13 @@ fn main() {
     let mut synch_time = 0;
 
     let mut apply_force_start;
-    let mut move_start ;
+    let mut move_start;
     let mut synch_start;
+
+    let particles_acc_thread = Arc::new(particles_acc);
+    let bins_thread = Arc::new(bins);
+    let particles_thread = Arc::new(particles);
+
 
     for step in 0..NSTEPS {
 
@@ -276,84 +301,102 @@ fn main() {
         //  compute forces
         //
 
-        apply_force_start = now.elapsed().as_millis();;
-        particles_acc.par_iter_mut().for_each(|mut p_acc|{
 
-            //Each thread will have a local copy of the stats
-            let mut navg_local = 0;
-            let mut davg_local = 0.0;
-            let mut dmin_local = 1.0;
+        apply_force_start = now.elapsed().as_millis();
 
-            p_acc.ax = 0.0;
-            p_acc.ay = 0.0;
+        crossbeam::scope(|scope| {
+            for p_chunk in particles_acc_thread.chunks(num as usize) {
+                let cloned_particles = particles_thread.clone();
+                let cloned_bins = bins_thread.clone();
 
+                let cloned_navg = navg.clone();
+                let cloned_davg = davg.clone();
+                let cloned_dmin = dmin.clone();
 
-            let curr_bin: i32 = compute_bin(particles[p_acc.pid as usize].x, particles[p_acc.pid as usize].y, size, BOX_NUM);
-            let curr_x: i32 = curr_bin % BOX_NUM;
-            let curr_y: i32 = curr_bin / BOX_NUM;
+                scope.spawn(move |_| {
+                    //Each thread will have a local copy of the stats
+                    let mut navg_local = 0;
+                    let mut davg_local = 0.0;
+                    let mut dmin_local = 1.0;
 
-            for j in -1..2{
-                for k in -1..2{
-                    if(curr_x + j >= 0 && curr_x + j < BOX_NUM  && curr_y + k >=0 && curr_y + k < BOX_NUM){
-                        let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
-                        bins[idx].read().unwrap().iter()
-                            .for_each(|v|  {
-                                apply_force(p_acc, &particles[p_acc.pid as usize],&particles[*v as usize], &mut dmin_local, &mut davg_local, &mut navg_local);
+                    for p_acc in p_chunk {
+
+                        let mut p = p_acc.write().unwrap();
+                        let clone_p = cloned_particles[p.pid as usize].read().unwrap();
+
+                        p.ax = 0.0;
+                        p.ay = 0.0;
+                        let curr_bin: i32 = compute_bin(clone_p.x, clone_p.y, size, BOX_NUM);
+                        let curr_x: i32 = curr_bin % BOX_NUM;
+                        let curr_y: i32 = curr_bin / BOX_NUM;
+
+                        for j in -1..2 {
+                            for k in -1..2 {
+                                if (curr_x + j >= 0 && curr_x + j < BOX_NUM && curr_y + k >= 0 && curr_y + k < BOX_NUM) {
+                                    let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
+                                    cloned_bins[idx].read().unwrap().iter().for_each(|v| {
+                                        apply_force(&mut p,
+                                                    &clone_p,
+                                                    &cloned_particles[*v as usize].read().unwrap(),
+                                                    &mut dmin_local, &mut davg_local, &mut navg_local);
+                                    });
                                 }
-                            );
+                            }
+                        }
                     }
-                }
-            }
 
-            //Synchronization step
-            //TODO: Use only one lock to enter here. Less overhead?
-            let mut navg_l = navg.lock().unwrap();
-            *navg_l += navg_local;
+                    //Synchronization step
+                    //TODO: Use only one lock to enter here. Less overhead?
+                    let mut navg_l = cloned_navg.lock().unwrap();
+                    *navg_l += navg_local;
 
-            let mut davg_l = davg.lock().unwrap();
-            *davg_l += davg_local;
+                    let mut davg_l = cloned_davg.lock().unwrap();
+                    *davg_l += davg_local;
 
-            let mut dmin_l = dmin.lock().unwrap();
-            if dmin_local < *dmin_l{
-                *dmin_l = dmin_local ;
-            }
-
-//            let mut navg_l = navg.write().unwrap();
-//            *navg_l += navg_local;
-//
-//            let mut davg_l = davg.write().unwrap();
-//            *davg_l += davg_local;
-//
-//            let mut dmin_l = dmin.write().unwrap();
-//            if dmin_local < *dmin_l{
-//                *dmin_l = dmin_local ;
-//            }
-
+                    let mut dmin_l = cloned_dmin.lock().unwrap();
+                    if dmin_local < *dmin_l {
+                        *dmin_l = dmin_local;
+                    }
+                });
+            };
         });
 
-        apply_force_time +=  now.elapsed().as_millis() - apply_force_start;
+        apply_force_time += now.elapsed().as_millis() - apply_force_start;
 
         //
         //  move particles
         //
         move_start = now.elapsed().as_millis();
-        particles.par_iter_mut().for_each(|particle| {
 
-            let old_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
-            move_particle (particle, &particles_acc[particle.pid as usize]);
-            let new_index: i32 = compute_bin(particle.x, particle.y, size, BOX_NUM);
+        crossbeam::scope(|scope| {
+            for p_chunk in particles_thread.chunks(num as usize) {
+                let cloned_acc = particles_acc_thread.clone();
+                let cloned_bins = bins_thread.clone();
 
-            if old_index != new_index{
-                {
-                    let mut bin = bins[old_index as usize].write().unwrap();
-                    bin.retain(|&x| x != particle.pid);
-                }
-                {
-                    let mut bin = bins[new_index as usize].write().unwrap();
-                    bin.push(particle.pid)
-                }
+                scope.spawn(move |_| {
+                    for particle in p_chunk {
+                        let mut p = particle.write().unwrap();
+                        let clone_p = cloned_acc[p.pid as usize].read().unwrap();
+
+                        let old_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
+                        move_particle(&mut p, &clone_p);
+                        let new_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
+
+                        if old_index != new_index {
+                            {
+                                let mut bin = cloned_bins[old_index as usize].write().unwrap();
+                                bin.retain(|&x| x != p.pid);
+                            }
+                            {
+                                let mut bin = cloned_bins[new_index as usize].write().unwrap();
+                                bin.push(p.pid)
+                            }
+                        }
+                    }
+                });
             }
         });
+
 
         move_time += now.elapsed().as_millis() - move_start;
 //        println!("{}", now.elapsed().as_secs());
@@ -362,26 +405,22 @@ fn main() {
         // Computing statistical data
         //
 
-        synch_start = now.elapsed().as_millis();;
+        synch_start = now.elapsed().as_millis();
+
         let navg_l = navg.lock().unwrap();
         let davg_l = davg.lock().unwrap();
         let dmin_l = dmin.lock().unwrap();
 
-//        let navg_l = navg.write().unwrap();
-//        let davg_l = davg.write().unwrap();
-//        let dmin_l = dmin.write().unwrap();
 
         if *navg_l > 0 {
-            absavg +=  *davg_l/(*navg_l as f64);
-            nabsavg+=1;
+            absavg += *davg_l / (*navg_l as f64);
+            nabsavg += 1;
         }
 
         if *(dmin_l) < absmin {
             absmin = *dmin_l;
         }
-        synch_time +=  now.elapsed().as_millis() - synch_start;
-
-
+        synch_time += now.elapsed().as_millis() - synch_start;
     }
 
     println!("n = {}, simulation time = {} ms, apply_force_time = {}, move_time = {}, synch_time = {}",
@@ -397,8 +436,8 @@ fn main() {
 
     //
     //  -The minimum distance absmin between 2 particles during the run of the simulation
-    //  -A Correct simulation will have particles stay at greater than 0.4 (of cutoff) with typical values between .7-.8
-    //  -A simulation where particles don't interact correctly will be less than 0.4 (of cutoff) with typical values between .01-.05
+    //  -A Correct simulation will have particles stay at greater than 0.4 (of CUTOFF) with typical values between .7-.8
+    //  -A simulation where particles don't interact correctly will be less than 0.4 (of CUTOFF) with typical values between .01-.05
     //
     //  -The average distance absavg is ~.95 when most particles are interacting correctly and ~.66 when no particles are interacting
     //
