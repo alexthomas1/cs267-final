@@ -283,7 +283,7 @@ fn main() {
 
     let mut particles_acc_thread = Arc::new(particles_acc);
     let bins_thread = Arc::new(bins);
-    let particles_thread = Arc::new(particles);
+    let mut particles_thread = Arc::new(particles);
 
 
     for step in 0..NSTEPS {
@@ -319,7 +319,8 @@ fn main() {
 
                         p.ax = 0.0;
                         p.ay = 0.0;
-                        let curr_bin: i32 = compute_bin(cloned_particles[p.pid as usize].x, cloned_particles[p.pid as usize].y, size, BOX_NUM);
+                        let pid = p.pid;
+                        let curr_bin: i32 = compute_bin(cloned_particles[pid as usize].x, cloned_particles[pid as usize].y, size, BOX_NUM);
                         let curr_x: i32 = curr_bin % BOX_NUM;
                         let curr_y: i32 = curr_bin / BOX_NUM;
 
@@ -329,7 +330,7 @@ fn main() {
                                     let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
                                     cloned_bins[idx].read().unwrap().iter().for_each(|v| {
                                         apply_force(&mut p,
-                                                    &cloned_particles[p.pid as usize],
+                                                    &cloned_particles[pid as usize],
                                                     &cloned_particles[*v as usize],
                                                     &mut dmin_local, &mut davg_local, &mut navg_local);
                                     });
@@ -361,37 +362,38 @@ fn main() {
         //
         move_start = now.elapsed().as_millis();
 
-//        crossbeam::scope(|scope| {
-//            for p_chunk in particles.chunks_mut(num as usize) {
-//                let cloned_acc = particles_acc_thread.clone();
-//                let cloned_bins = bins_thread.clone();
-//
-//                scope.spawn(move |_| {
-//                    for p in p_chunk {
-//                        let clone_p = cloned_acc[p.pid as usize].read().unwrap();
-//
-//                        let old_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
-//                        move_particle( p, &clone_p);
-//                        let new_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
-//
-//                        if old_index != new_index {
-//                            {
-//                                let mut bin = cloned_bins[old_index as usize].write().unwrap();
-//                                bin.retain(|&x| x != p.pid);
-//                            }
-//                            {
-//                                let mut bin = cloned_bins[new_index as usize].write().unwrap();
-//                                bin.push(p.pid)
-//                            }
-//                        }
-//                    }
-//                });
-//            }
-//        }).unwrap();
+        crossbeam::scope(|scope| {
+
+            let iter = Arc::get_mut(&mut particles_thread).unwrap();
+
+            for p_chunk in iter.chunks_mut(num as usize) {
+                let cloned_acc = particles_acc_thread.clone();
+                let cloned_bins = bins_thread.clone();
+
+                scope.spawn(move |_| {
+                    for p in p_chunk {
+
+                        let old_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
+                        move_particle( p, &cloned_acc[p.pid as usize]);
+                        let new_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
+
+                        if old_index != new_index {
+                            {
+                                let mut bin = cloned_bins[old_index as usize].write().unwrap();
+                                bin.retain(|&x| x != p.pid);
+                            }
+                            {
+                                let mut bin = cloned_bins[new_index as usize].write().unwrap();
+                                bin.push(p.pid)
+                            }
+                        }
+                    }
+                });
+            }
+        }).unwrap();
 
 
         move_time += now.elapsed().as_millis() - move_start;
-//        println!("{}", now.elapsed().as_secs());
 
         //
         // Computing statistical data
