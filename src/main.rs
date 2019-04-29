@@ -19,7 +19,7 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 10000;
+const n: i32 = 100000;
 
 
 struct particle_t_accel
@@ -351,7 +351,7 @@ fn main() {
 
     }
 
-    println!("n = {}, simulation time = {} seconds", n, now.elapsed().as_secs());
+    println!("n = {}, simulation time = {} seconds", n, now.elapsed().as_millis());
 
     if nabsavg > 0 {
         absavg /= nabsavg as f64;
