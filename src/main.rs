@@ -24,7 +24,7 @@ const DT: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 1000;
+const n: i32 = 5000;
 
 
 struct particle_t_accel
@@ -349,7 +349,8 @@ fn main() {
                     let mut acc_idx = 0;
 
                     for pid in start..end {
-                        let curr_bin: i32 = compute_bin(cloned_particles.read().unwrap()[pid as usize].x, cloned_particles.read().unwrap()[pid as usize].y, size, BOX_NUM);
+                        let cloned_particles_unwrap = cloned_particles.read().unwrap();
+                        let curr_bin: i32 = compute_bin(cloned_particles_unwrap[pid as usize].x,cloned_particles_unwrap[pid as usize].y, size, BOX_NUM);
                         let curr_x: i32 = curr_bin % BOX_NUM;
                         let curr_y: i32 = curr_bin / BOX_NUM;
                         let mut ax = 0.0;
@@ -363,14 +364,19 @@ fn main() {
                             }
                         );
 
+                        let curr_acc = &mut local_buf[acc_idx as usize];
+                        let curr_p = &cloned_particles_unwrap[pid as usize];
+
                         for j in -1..2 {
                             for k in -1..2 {
                                 if (curr_x + j >= 0 && curr_x + j < BOX_NUM && curr_y + k >= 0 && curr_y + k < BOX_NUM) {
                                     let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
                                     cloned_bins[idx].read().unwrap().iter().for_each(|v| {
-                                        apply_force(&mut local_buf[acc_idx as usize],
-                                                    &cloned_particles.read().unwrap()[pid as usize],
-                                                    &cloned_particles.read().unwrap()[*v as usize],
+                                        let cloned_particles_unwrap = cloned_particles.read().unwrap();
+
+                                        apply_force(curr_acc,
+                                                    curr_p,
+                                                    &cloned_particles_unwrap[*v as usize],
                                                     &mut dmin_local, &mut davg_local, &mut navg_local);
                                     });
                                 }
@@ -382,9 +388,8 @@ fn main() {
 
                     let mut p_acc = cloned_particles_acc.write().unwrap();
                     let mut idx = 0;
-//                    println!("{}, start: {}, end: {}, i: {}", local_buf.len(), start, end, i);
+
                     for pid in start..end {
-//                        println!("{}, {}", local_buf[idx as usize].ax, local_buf[idx as usize].ay);
                         p_acc[pid as usize].ax = local_buf[idx as usize].ax;
                         p_acc[pid as usize].ay = local_buf[idx as usize].ay;
                         idx += 1;
@@ -452,14 +457,10 @@ fn main() {
                         });
 
                         let old_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
-//                        println!("1) {}, {}", local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y);
                         move_particle(&mut local_buf[curr_idx as usize], &cloned_particles_acc.read().unwrap()[pid as usize]);
-//                        println!("2) {}, {}", local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y);
                         let new_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
 
                         if old_index != new_index {
-//                            println!("{}, {}", old_index, new_index);
-
                             {
                                 let mut bin = cloned_bins[old_index as usize].write().unwrap();
                                 bin.retain(|&x| x != pid);
