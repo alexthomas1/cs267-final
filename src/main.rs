@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use std::num;
 use rayon::prelude::*;
 use std::sync::{Mutex, Arc, RwLock};
+use crossbeam_utils::CachePadded;
+
 
 
 const density: f64 = 0.0005;
@@ -19,7 +21,7 @@ const dt: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 100000;
+const n: i32 = 5000;
 
 
 struct particle_t_accel
@@ -244,7 +246,7 @@ fn main() {
 
     for k in 0..BOX_NUM_t{
         let mut tmpVec: RwLock<Vec<i32>> = RwLock::new(Vec::new());
-        bins.push(tmpVec);
+        bins.push(CachePadded::new(tmpVec));
     }
 
     for k in 0..n{
@@ -273,8 +275,6 @@ fn main() {
 
             p_acc.ax = 0.0;
             p_acc.ay = 0.0;
-
-//            println!("{}", p_acc.pid);
 
 
             let curr_bin: i32 = compute_bin(particles[p_acc.pid as usize].x, particles[p_acc.pid as usize].y, size, BOX_NUM);
