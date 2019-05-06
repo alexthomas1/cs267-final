@@ -265,6 +265,7 @@ fn main() {
 
     let mut k: usize = 0;
     let mut bins = Vec::new();
+    let mut times = Mutex::new(Vec::new());
 
     for k in 0..BOX_NUM_t {
         let mut tmpVec: RwLock<Vec<i32>> = RwLock::new(Vec::new());
@@ -286,6 +287,8 @@ fn main() {
     let mut apply_force_time = 0;
     let mut move_time = 0;
     let mut synch_time = 0;
+    let mut idle_time = 0;
+    let mut agg_idle_time = 0;
 
     let mut apply_force_start;
     let mut move_start;
@@ -294,6 +297,8 @@ fn main() {
     let mut particles_acc_thread = Arc::new(particles_acc);
     let bins_thread = Arc::new(bins);
     let mut particles_thread = Arc::new(particles);
+
+    let mut times_thread = Arc::new(times);
 
 
     for step in 0..NSTEPS {
@@ -314,6 +319,7 @@ fn main() {
             let cloned_davg = davg.clone();
             let cloned_dmin = dmin.clone();
             let mut threads = Vec::new();
+            let cloned_times = times_thread.clone();
 
             threads.push(
                 thread::spawn(move || {
@@ -372,6 +378,7 @@ fn main() {
                     if dmin_local < *dmin_l {
                         *dmin_l = dmin_local;
                     }
+                    cloned_times.lock().unwrap().push(now.elapsed().as_millis());
                 })
             );
 
@@ -380,8 +387,17 @@ fn main() {
             }
         }
 
+        let curr_time = now.elapsed().as_millis();
 
-        apply_force_time += now.elapsed().as_millis() - apply_force_start;
+        for t in times_thread.lock().unwrap().iter() {
+            agg_idle_time += (curr_time - *t);
+        }
+
+        idle_time += curr_time - times_thread.lock().unwrap().iter().min().unwrap();
+
+        times_thread.lock().unwrap().clear();
+
+        apply_force_time += curr_time - apply_force_start;
 
         //
         //  move particles
@@ -394,6 +410,7 @@ fn main() {
             let cloned_particles = particles_thread.clone();
             let cloned_bins = bins_thread.clone();
             let mut threads = Vec::new();
+            let cloned_times = times_thread.clone();
 
             threads.push(
                 thread::spawn(move || {
@@ -426,6 +443,7 @@ fn main() {
                             }
                         }
                     }
+                    cloned_times.lock().unwrap().push(now.elapsed().as_millis());
                 })
             );
 
@@ -434,8 +452,17 @@ fn main() {
             }
         }
 
+        let curr_time = now.elapsed().as_millis();
 
-        move_time += now.elapsed().as_millis() - move_start;
+        for t in times_thread.lock().unwrap().iter() {
+            agg_idle_time += (curr_time - *t);
+        }
+
+        idle_time += curr_time - times_thread.lock().unwrap().iter().min().unwrap();
+
+        times_thread.lock().unwrap().clear();
+
+        apply_force_time += curr_time - apply_force_start;
 
         //
         // Computing statistical data
@@ -459,12 +486,14 @@ fn main() {
         synch_time += now.elapsed().as_millis() - synch_start;
     }
 
-    println!("n = {}, simulation time = {} ms, apply_force_time = {}, move_time = {}, synch_time = {}",
+    println!("n = {}, simulation time = {} ms, apply_force_time = {}, move_time = {}, synch_time = {}, idle_time = {}, agg_idle_time = {}",
              n,
              now.elapsed().as_millis(),
              apply_force_time,
              move_time,
-             synch_time);
+             synch_time,
+             idle_time,
+             agg_idle_time);
 
     if nabsavg > 0 {
         absavg /= nabsavg as f64;
