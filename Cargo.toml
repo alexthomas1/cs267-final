@@ -10,4 +10,5 @@ rand = "0.3"
 rayon = "1.0.3"
 crossbeam = "0.7.1"
 num_cpus = "1.10.0"
+thread-id = "3.3.0"
 

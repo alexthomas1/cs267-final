@@ -12,6 +12,7 @@ use std::num;
 use rayon::prelude::*;
 use std::sync::{Mutex, Arc, RwLock};
 use std::thread;
+use thread_id;
 
 
 const DENSITY: f64 = 0.0005;
@@ -23,7 +24,7 @@ const DT: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 5000;
+const n: i32 = 1000;
 
 
 struct particle_t_accel
@@ -131,6 +132,38 @@ fn apply_force(p_acc: &mut particle_t_accel, p: &particle_t, neighbor: &particle
     let coef: f64 = (1.0 - CUTOFF / r) / r2 / MASS;
     p_acc.ax += coef * dx;
     p_acc.ay += coef * dy;
+//    println!("{}, {}", p_acc.ax, p_acc.ay);
+}
+
+fn apply_force_thread(ax: &mut f64, ay: &mut f64, p: &particle_t, neighbor: &particle_t, dmin: &mut f64, davg: &mut f64, navg: &mut i32)
+{
+    let dx: f64 = neighbor.x - p.x;
+    let dy: f64 = neighbor.y - p.y;
+
+    let mut r2: f64 = dx * dx + dy * dy;
+    if r2 > CUTOFF * CUTOFF {
+        return;
+    }
+    if r2 != 0.0
+    {
+        if r2 / (CUTOFF * CUTOFF) < *dmin * (*dmin) {
+            *dmin = r2.sqrt() / CUTOFF;
+        }
+        (*davg) += r2.sqrt() / CUTOFF;
+        (*navg) += 1;
+    }
+
+    r2 = r2.max(MIN_R * MIN_R);
+    let r: f64 = r2.sqrt();
+    //
+    //  very simple short-range repulsive force
+    //
+
+    let coef: f64 = (1.0 - CUTOFF / r) / r2 / MASS;
+//    println!("{}, {}", ax, ay);
+    (*ax) += coef * dx;
+    (*ay) += coef * dy;
+//    println!("{}, {}", ax, ay);
 }
 
 
@@ -186,7 +219,8 @@ fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32 {
 fn main() {
     let size: f64 = (DENSITY * n as f64).sqrt();
 
-    let num = n/(num_cpus::get() as i32);
+    let num = (n + num_cpus::get() as i32 - 1) / (num_cpus::get() as i32);
+    let NTHREADS = num_cpus::get() as i32;
 
     let navg = Arc::new(Mutex::new(0));
     let davg = Arc::new(Mutex::new(0.0));
@@ -210,13 +244,6 @@ fn main() {
 
 
     for i in 0..n {
-//        particles.push(RwLock::new(particle_t {
-//            x: 0.0,
-//            y: 0.0,
-//            vx: 0.0,
-//            vy: 0.0,
-//            pid: i,
-//        }));
 
         particles[i as usize] = particle_t {
             x: 0.0,
@@ -226,18 +253,12 @@ fn main() {
             pid: i,
         };
 
-//        println!("{}, {}, {:?}", i, particles_acc.len(), particles_acc[i as usize]);
         particles_acc[i as usize] = particle_t_accel {
             ax: 0.0,
             ay: 0.0,
             pid: i,
         };
 
-//        particles_acc.push(RwLock::new(particle_t_accel {
-//            ax: 0.0,
-//            ay: 0.0,
-//            pid: i,
-//        }));
     }
 
     init_particles(n, &mut particles);
@@ -281,9 +302,12 @@ fn main() {
     let mut move_start;
     let mut synch_start;
 
-    let mut particles_acc_thread = Arc::new(particles_acc);
+    let mut particles_acc_lock = RwLock::new(particles_acc);
+    let mut particles_lock = RwLock::new(particles);
+
+    let mut particles_acc_thread = Arc::new(particles_acc_lock);
     let bins_thread = Arc::new(bins);
-    let mut particles_thread = Arc::new(particles);
+    let mut particles_thread = Arc::new(particles_lock);
 
 
     for step in 0..NSTEPS {
@@ -292,54 +316,81 @@ fn main() {
         //  compute forces
         //
 
-
         apply_force_start = now.elapsed().as_millis();
 
-        crossbeam::scope(|scope| {
+        for i in 0..NTHREADS {
+            let arc_tid = Arc::new(i);
+            let cloned_tid = arc_tid.clone();
+            let cloned_particles_acc = particles_acc_thread.clone();
+            let cloned_particles = particles_thread.clone();
+            let cloned_bins = bins_thread.clone();
+            let cloned_navg = navg.clone();
+            let cloned_davg = davg.clone();
+            let cloned_dmin = dmin.clone();
+            let mut threads = Vec::new();
 
-            let iter = Arc::get_mut(&mut particles_acc_thread).unwrap();
-            for p_chunk in iter.chunks_mut(num as usize) {
-                let cloned_particles = particles_thread.clone();
-                let cloned_bins = bins_thread.clone();
-
-                let cloned_navg = navg.clone();
-                let cloned_davg = davg.clone();
-                let cloned_dmin = dmin.clone();
-
-                scope.spawn(move |_| {
-                    //Each thread will have a local copy of the stats
+            threads.push(
+                thread::spawn(move || {
                     let mut navg_local = 0;
                     let mut davg_local = 0.0;
                     let mut dmin_local = 1.0;
 
-                    for p_acc in p_chunk {
+                    let start = i * num;
+                    let mut end = (i + 1) * (num);
+                    if end > n {
+                        end = n;
+                    }
 
-                        let mut p = p_acc;
-//                        let clone_p = &particles[p.pid as usize];
+                    if start >= n {
+                        return;
+                    }
 
-                        p.ax = 0.0;
-                        p.ay = 0.0;
-                        let pid = p.pid;
-                        let curr_bin: i32 = compute_bin(cloned_particles[pid as usize].x, cloned_particles[pid as usize].y, size, BOX_NUM);
+                    let mut local_buf = Vec::new();
+                    let mut acc_idx = 0;
+
+                    for pid in start..end {
+                        let curr_bin: i32 = compute_bin(cloned_particles.read().unwrap()[pid as usize].x, cloned_particles.read().unwrap()[pid as usize].y, size, BOX_NUM);
                         let curr_x: i32 = curr_bin % BOX_NUM;
                         let curr_y: i32 = curr_bin / BOX_NUM;
+                        let mut ax = 0.0;
+                        let mut ay = 0.0;
+
+                        local_buf.push(
+                            particle_t_accel {
+                                ax: 0.0,
+                                ay: 0.0,
+                                pid: pid,
+                            }
+                        );
 
                         for j in -1..2 {
                             for k in -1..2 {
                                 if (curr_x + j >= 0 && curr_x + j < BOX_NUM && curr_y + k >= 0 && curr_y + k < BOX_NUM) {
                                     let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
                                     cloned_bins[idx].read().unwrap().iter().for_each(|v| {
-                                        apply_force(&mut p,
-                                                    &cloned_particles[pid as usize],
-                                                    &cloned_particles[*v as usize],
+                                        apply_force(&mut local_buf[acc_idx as usize],
+                                                    &cloned_particles.read().unwrap()[pid as usize],
+                                                    &cloned_particles.read().unwrap()[*v as usize],
                                                     &mut dmin_local, &mut davg_local, &mut navg_local);
                                     });
                                 }
                             }
                         }
+
+                        acc_idx += 1;
                     }
 
-                    //Synchronization step
+                    let mut p_acc = cloned_particles_acc.write().unwrap();
+                    let mut idx = 0;
+//                    println!("{}, start: {}, end: {}, i: {}", local_buf.len(), start, end, i);
+                    for pid in start..end {
+//                        println!("{}, {}", local_buf[idx as usize].ax, local_buf[idx as usize].ay);
+                        p_acc[pid as usize].ax = local_buf[idx as usize].ax;
+                        p_acc[pid as usize].ay = local_buf[idx as usize].ay;
+                        idx += 1;
+                    }
+
+                    //Synch step
                     //TODO: Use only one lock to enter here. Less overhead?
                     let mut navg_l = cloned_navg.lock().unwrap();
                     *navg_l += navg_local;
@@ -351,9 +402,14 @@ fn main() {
                     if dmin_local < *dmin_l {
                         *dmin_l = dmin_local;
                     }
-                });
-            };
-        }).unwrap();
+                })
+            );
+
+            for t in threads {
+                t.join();
+            }
+        }
+
 
         apply_force_time += now.elapsed().as_millis() - apply_force_start;
 
@@ -362,35 +418,78 @@ fn main() {
         //
         move_start = now.elapsed().as_millis();
 
-        crossbeam::scope(|scope| {
+        for i in 0..NTHREADS {
+            let arc_tid = Arc::new(i);
+            let cloned_particles_acc = particles_acc_thread.clone();
+            let cloned_particles = particles_thread.clone();
+            let cloned_bins = bins_thread.clone();
+            let mut threads = Vec::new();
 
-            let iter = Arc::get_mut(&mut particles_thread).unwrap();
+            threads.push(
+                thread::spawn(move || {
+                    let start = i * num;
+                    let mut end = (i + 1) * (num);
+                    if end > n {
+                        end = n;
+                    }
 
-            for p_chunk in iter.chunks_mut(num as usize) {
-                let cloned_acc = particles_acc_thread.clone();
-                let cloned_bins = bins_thread.clone();
+                    if start >= n {
+                        return;
+                    }
 
-                scope.spawn(move |_| {
-                    for p in p_chunk {
+                    let mut curr_idx = 0;
+                    let mut local_buf = Vec::new();
 
-                        let old_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
-                        move_particle( p, &cloned_acc[p.pid as usize]);
-                        let new_index: i32 = compute_bin(p.x, p.y, size, BOX_NUM);
+                    for pid in start..end {
+                        let curr_p = cloned_particles.read().unwrap();
+
+                        local_buf.push(particle_t {
+                            x: curr_p[pid as usize].x,
+                            y: curr_p[pid as usize].y,
+                            vx: curr_p[pid as usize].vx,
+                            vy: curr_p[pid as usize].vy,
+                            pid: pid,
+                        });
+
+                        let old_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
+//                        println!("1) {}, {}", local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y);
+                        move_particle(&mut local_buf[curr_idx as usize], &cloned_particles_acc.read().unwrap()[pid as usize]);
+//                        println!("2) {}, {}", local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y);
+                        let new_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
 
                         if old_index != new_index {
+//                            println!("{}, {}", old_index, new_index);
+
                             {
                                 let mut bin = cloned_bins[old_index as usize].write().unwrap();
-                                bin.retain(|&x| x != p.pid);
+                                bin.retain(|&x| x != pid);
                             }
                             {
                                 let mut bin = cloned_bins[new_index as usize].write().unwrap();
-                                bin.push(p.pid)
+                                bin.push(pid)
                             }
                         }
+
+                        curr_idx += 1;
                     }
-                });
+
+
+                    let mut p = cloned_particles.write().unwrap();
+                    curr_idx = 0;
+                    for pid in start..end {
+                        p[pid as usize].x = local_buf[curr_idx as usize].x;
+                        p[pid as usize].y = local_buf[curr_idx as usize].y;
+                        p[pid as usize].vx = local_buf[curr_idx as usize].vx;
+                        p[pid as usize].vy = local_buf[curr_idx as usize].vy;
+                        curr_idx += 1;
+                    }
+                })
+            );
+
+            for t in threads {
+                t.join();
             }
-        }).unwrap();
+        }
 
 
         move_time += now.elapsed().as_millis() - move_start;
