@@ -229,6 +229,12 @@ fn main() {
     let mut j: usize = 0;
 
     let now = Instant::now();
+    
+    let mut apply_force_time = 0;
+    let mut move_time = 0;
+
+    let mut apply_force_start;
+    let mut move_start;
 
     for step in 0..NSTEPS {
         navg = 0;
@@ -239,6 +245,7 @@ fn main() {
         //  compute forces
         //
 
+        apply_force_start = now.elapsed().as_millis();
         for i in 0..n {
             particles[i as usize].ax = 0.0;
             particles[i as usize].ay = 0.0;
@@ -263,9 +270,12 @@ fn main() {
             }
         }
 
+        apply_force_time += now.elapsed().as_millis() - apply_force_start;
+
         //
         //  move particles
         //
+        move_start = now.elapsed().as_millis();
         for i in 0..n {
 
             let old_index: i32 = compute_bin(particles[i as usize].x, particles[i as usize].y, size, BOX_NUM);
@@ -279,6 +289,7 @@ fn main() {
                 bins[new_index as usize].push(i);
             }
         }
+        move_time += now.elapsed().as_millis() - move_start;
 
 
         //
@@ -296,7 +307,12 @@ fn main() {
 
     }
 
-    println!("n = {}, simulation time = {} ms", n, now.elapsed().as_millis());
+    println!("n = {}, simulation time = {} ms, apply_force_time = {}, move_time = {}",
+             n,
+             now.elapsed().as_millis(),
+             apply_force_time,
+             move_time,
+             );
 
     if nabsavg > 0 {
         absavg /= nabsavg as f64;
