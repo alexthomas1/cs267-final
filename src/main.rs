@@ -24,7 +24,7 @@ const DT: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 5000;
+const n: i32 = 1000;
 
 
 struct particle_t_accel
@@ -54,7 +54,7 @@ struct particle_t
  *
  *
  * */
-fn init_particles(n_t: i32, p_l: &mut [particle_t])
+fn init_particles(n_t: i32, p_l: &mut [RwLock<particle_t>])
 {
 //    srand48(time(NULL));
 
@@ -89,7 +89,7 @@ fn init_particles(n_t: i32, p_l: &mut [particle_t])
         //  distribute particles evenly to ensure proper spacing
         //
 
-        let mut p = &mut p_l[i as usize];
+        let mut p = &mut p_l[i as usize].write().unwrap();
 
         unsafe {
             p.x = size * (1. + (k % sx) as f64) / (1.0 + sx as f64); //gets x
@@ -226,39 +226,28 @@ fn main() {
     let davg = Arc::new(Mutex::new(0.0));
     let dmin = Arc::new(Mutex::new(1.0));
 
-//    let mut navg = RwLock::new(0);
-//    let mut davg = RwLock::new(0.0);
-//    let mut dmin = RwLock::new(1.0);
-
     //Global stats
     let mut nabsavg: i32 = 0;
     let mut absmin = 1.0;
     let mut absavg = 0.0;
 
-    let mut particles: [particle_t; n as usize] = unsafe { ::std::mem::uninitialized() };
-
-//    let mut particles = Vec::new();
-//    let mut particles_acc = Vec::new();
-
-    let mut particles_acc: [particle_t_accel; n as usize] = unsafe { ::std::mem::uninitialized() };
-
+    let mut particles = Vec::new();
+    let mut particles_acc = Vec::new();
 
     for i in 0..n {
-
-        particles[i as usize] = particle_t {
+        particles.push(RwLock::new(particle_t {
             x: 0.0,
             y: 0.0,
             vx: 0.0,
             vy: 0.0,
             pid: i,
-        };
+        }));
 
-        particles_acc[i as usize] = particle_t_accel {
+        particles_acc.push(RwLock::new(particle_t_accel {
             ax: 0.0,
             ay: 0.0,
             pid: i,
-        };
-
+        }));
     }
 
     init_particles(n, &mut particles);
@@ -283,7 +272,7 @@ fn main() {
     }
 
     for k in 0..n {
-        let p = &particles[k as usize];
+        let p = particles[k as usize].read().unwrap();
         let bin_index: usize = compute_bin(p.x, p.y, size, BOX_NUM) as usize;
         bins[bin_index].write().unwrap().push(k);
     }
@@ -302,12 +291,9 @@ fn main() {
     let mut move_start;
     let mut synch_start;
 
-    let mut particles_acc_lock = RwLock::new(particles_acc);
-    let mut particles_lock = RwLock::new(particles);
-
-    let mut particles_acc_thread = Arc::new(particles_acc_lock);
+    let mut particles_acc_thread = Arc::new(particles_acc);
     let bins_thread = Arc::new(bins);
-    let mut particles_thread = Arc::new(particles_lock);
+    let mut particles_thread = Arc::new(particles);
 
 
     for step in 0..NSTEPS {
@@ -345,55 +331,34 @@ fn main() {
                         return;
                     }
 
-                    let mut local_buf = Vec::new();
-                    let mut acc_idx = 0;
-
                     for pid in start..end {
-                        let cloned_particles_unwrap = cloned_particles.read().unwrap();
-                        let curr_bin: i32 = compute_bin(cloned_particles_unwrap[pid as usize].x,cloned_particles_unwrap[pid as usize].y, size, BOX_NUM);
+                        let curr_p = cloned_particles[pid as usize].read().unwrap();
+                        let curr_bin: i32 = compute_bin(curr_p.x, curr_p.y, size, BOX_NUM);
                         let curr_x: i32 = curr_bin % BOX_NUM;
                         let curr_y: i32 = curr_bin / BOX_NUM;
-                        let mut ax = 0.0;
-                        let mut ay = 0.0;
 
-                        local_buf.push(
-                            particle_t_accel {
-                                ax: 0.0,
-                                ay: 0.0,
-                                pid: pid,
-                            }
-                        );
+                        let mut curr_acc = cloned_particles_acc[pid as usize].write().unwrap();
+                        curr_acc.ax = 0.0;
+                        curr_acc.ay = 0.0;
 
-                        let curr_acc = &mut local_buf[acc_idx as usize];
-                        let curr_p = &cloned_particles_unwrap[pid as usize];
 
                         for j in -1..2 {
                             for k in -1..2 {
                                 if (curr_x + j >= 0 && curr_x + j < BOX_NUM && curr_y + k >= 0 && curr_y + k < BOX_NUM) {
                                     let idx: usize = (curr_x + j + curr_y * BOX_NUM) as usize;
                                     cloned_bins[idx].read().unwrap().iter().for_each(|v| {
-                                        let cloned_particles_unwrap = cloned_particles.read().unwrap();
+                                        let cloned_particles_unwrap = cloned_particles[*v as usize].read().unwrap();
 
-                                        apply_force(curr_acc,
-                                                    curr_p,
-                                                    &cloned_particles_unwrap[*v as usize],
+                                        apply_force(&mut curr_acc,
+                                                    &curr_p,
+                                                    &cloned_particles_unwrap,
                                                     &mut dmin_local, &mut davg_local, &mut navg_local);
                                     });
                                 }
                             }
                         }
-
-                        acc_idx += 1;
                     }
 
-                    let mut p_acc = cloned_particles_acc.write().unwrap();
-                    let mut idx = 0;
-
-                    for pid in start..end {
-                        p_acc[pid as usize].ax = local_buf[idx as usize].ax;
-                        p_acc[pid as usize].ay = local_buf[idx as usize].ay;
-                        idx += 1;
-                    }
 
                     //Synch step
                     //TODO: Use only one lock to enter here. Less overhead?
@@ -442,23 +407,13 @@ fn main() {
                         return;
                     }
 
-                    let mut curr_idx = 0;
-                    let mut local_buf = Vec::new();
-
                     for pid in start..end {
-                        let curr_p = cloned_particles.read().unwrap();
+                        let mut curr_p = cloned_particles[pid as usize].write().unwrap();
+                        let curr_acc = cloned_particles_acc[pid as usize].read().unwrap();
 
-                        local_buf.push(particle_t {
-                            x: curr_p[pid as usize].x,
-                            y: curr_p[pid as usize].y,
-                            vx: curr_p[pid as usize].vx,
-                            vy: curr_p[pid as usize].vy,
-                            pid: pid,
-                        });
-
-                        let old_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
-                        move_particle(&mut local_buf[curr_idx as usize], &cloned_particles_acc.read().unwrap()[pid as usize]);
-                        let new_index: i32 = compute_bin(local_buf[curr_idx as usize].x, local_buf[curr_idx as usize].y, size, BOX_NUM);
+                        let old_index: i32 = compute_bin(curr_p.x, curr_p.y, size, BOX_NUM);
+                        move_particle(&mut curr_p, &curr_acc);
+                        let new_index: i32 = compute_bin(curr_p.x, curr_p.y, size, BOX_NUM);
 
                         if old_index != new_index {
                             {
@@ -470,19 +425,6 @@ fn main() {
                                 bin.push(pid)
                             }
                         }
-
-                        curr_idx += 1;
-                    }
-
-
-                    let mut p = cloned_particles.write().unwrap();
-                    curr_idx = 0;
-                    for pid in start..end {
-                        p[pid as usize].x = local_buf[curr_idx as usize].x;
-                        p[pid as usize].y = local_buf[curr_idx as usize].y;
-                        p[pid as usize].vx = local_buf[curr_idx as usize].vx;
-                        p[pid as usize].vy = local_buf[curr_idx as usize].vy;
-                        curr_idx += 1;
                     }
                 })
             );
