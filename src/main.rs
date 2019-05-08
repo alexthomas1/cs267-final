@@ -244,7 +244,7 @@ fn main() {
 
     let mut k: usize = 0;
     let mut bins = Vec::new();
-    let mut times = Mutex::new(Vec::new());
+//    let mut times = Mutex::new(Vec::new());
 
     for k in 0..BOX_NUM_t {
         let mut tmpVec: RwLock<Vec<i32>> = RwLock::new(Vec::new());
@@ -278,7 +278,7 @@ fn main() {
     let bins_thread = Arc::new(bins);
     let mut particles_thread = Arc::new(particles);
 
-    let mut times_thread = Arc::new(times);
+//    let mut times_thread = Arc::new(times);
 
 
     for step in 0..NSTEPS {
@@ -301,7 +301,7 @@ fn main() {
                 let cloned_davg = davg.clone();
                 let cloned_dmin = dmin.clone();
 
-                let cloned_times = times_thread.clone();
+//                let cloned_times = times_thread.clone();
 
                 scope.spawn(move |_| {
                     //Each thread will have a local copy of the stats
@@ -349,20 +349,20 @@ fn main() {
                         *dmin_l = dmin_local;
                     }
 
-                    cloned_times.lock().unwrap().push(now.elapsed().as_millis());
+//                    cloned_times.lock().unwrap().push(now.elapsed().as_millis());
                 });
             };
         }).unwrap();
 
         let curr_time = now.elapsed().as_millis();
 
-        for t in times_thread.lock().unwrap().iter(){
-            agg_idle_time += (curr_time - *t);
-        }
+//        for t in times_thread.lock().unwrap().iter(){
+//            agg_idle_time += (curr_time - *t);
+//        }
 
-        idle_time += curr_time-times_thread.lock().unwrap().iter().min().unwrap();
+//        idle_time += curr_time-times_thread.lock().unwrap().iter().min().unwrap();
 
-        times_thread.lock().unwrap().clear();
+//        times_thread.lock().unwrap().clear();
 
         apply_force_time += curr_time - apply_force_start;
 
@@ -379,7 +379,7 @@ fn main() {
             for p_chunk in iter.chunks_mut(num as usize) {
                 let cloned_acc = particles_acc_thread.clone();
                 let cloned_bins = bins_thread.clone();
-                let cloned_times = times_thread.clone();
+//                let cloned_times = times_thread.clone();
 
                 scope.spawn(move |_| {
                     for p in p_chunk {
@@ -399,7 +399,7 @@ fn main() {
                             }
                         }
 
-                        cloned_times.lock().unwrap().push(now.elapsed().as_millis());
+//                        cloned_times.lock().unwrap().push(now.elapsed().as_millis());
                     }
                 });
             }
@@ -408,15 +408,15 @@ fn main() {
 
         let curr_time = now.elapsed().as_millis();
 
-        for t in times_thread.lock().unwrap().iter(){
-            agg_idle_time += (curr_time - *t);
-        }
+//        for t in times_thread.lock().unwrap().iter(){
+//            agg_idle_time += (curr_time - *t);
+//        }
 
-        idle_time += curr_time - times_thread.lock().unwrap().iter().min().unwrap();
+//        idle_time += curr_time - times_thread.lock().unwrap().iter().min().unwrap();
 
         move_time += curr_time - move_start;
 
-        times_thread.lock().unwrap().clear();
+//        times_thread.lock().unwrap().clear();
 
         //
         // Computing statistical data
