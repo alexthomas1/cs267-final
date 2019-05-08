@@ -12,6 +12,7 @@ use std::num;
 use rayon::prelude::*;
 use std::sync::{Mutex, Arc, RwLock};
 use std::thread;
+use std::env;
 
 
 const DENSITY: f64 = 0.0005;
@@ -23,7 +24,7 @@ const DT: f64 = 0.0005;
 const NSTEPS: i32 = 1000;
 const SAVEFREQ: i32 = 10;
 
-const n: i32 = 5000;
+const n: i32 = 80000;
 
 
 struct particle_t_accel
@@ -185,8 +186,10 @@ fn compute_bin(x: f64, y: f64, size_t: f64, box_num: i32) -> i32 {
 
 fn main() {
     let size: f64 = (DENSITY * n as f64).sqrt();
+    let args: Vec<String> = env::args().collect();
+    let num_cpus: i32 = args[1].parse().unwrap();
 
-    let num = n/(num_cpus::get() as i32);
+    let num = n/num_cpus;
 
     let navg = Arc::new(Mutex::new(0));
     let davg = Arc::new(Mutex::new(0.0));
