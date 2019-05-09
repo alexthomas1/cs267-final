@@ -1,4 +1,4 @@
-# cs267-final
+# Parallelizing N-Body in Rust
 # Alex Thomas, Seth Park
 
 In order to run unoptimized code input:
